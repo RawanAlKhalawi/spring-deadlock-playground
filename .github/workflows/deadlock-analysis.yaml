@@ -1,0 +1,126 @@
+name: Deadlock Analysis Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deadlock-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ─── Checkout the target project to scan ───────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ─── Login to Docker Hub ────────────────────────────────────────────────
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # ─── Pull images ────────────────────────────────────────────────────────
+      - name: Pull predlock-extractor image
+        run: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/predlock-extractor:latest
+
+      - name: Pull deadlock-analyzer image
+        run: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/deadlock-analyzer:latest
+
+      # ─── Phase: Extract SQL operations from project source ──────────────────
+      - name: Run predlock-extractor
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/project \
+            -v ${{ github.workspace }}/pipeline-output:/output \
+            ${{ secrets.DOCKERHUB_USERNAME }}/predlock-extractor:latest \
+            /project/src/main/java \
+            /output/deadlock-analyzer-input.json
+
+      - name: Verify extractor output
+        run: |
+          if [ ! -f "${{ github.workspace }}/pipeline-output/deadlock-analyzer-input.json" ]; then
+            echo "Error: predlock-extractor did not produce output file"
+            exit 1
+          fi
+          echo "Extractor output:"
+          cat ${{ github.workspace }}/pipeline-output/deadlock-analyzer-input.json | \
+            python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Transactions found: {len(d[\"transactions\"])}')"
+
+      # ─── Phase: Analyze for deadlocks ───────────────────────────────────────
+      - name: Run deadlock-analyzer
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/pipeline-output:/data \
+            ${{ secrets.DOCKERHUB_USERNAME }}/deadlock-analyzer:latest \
+            --traces /data/deadlock-analyzer-input.json \
+            --output /data/reports \
+            --format both \
+            --timeout 30000000
+
+      - name: Verify analyzer output
+        run: |
+          if [ ! -f "${{ github.workspace }}/pipeline-output/reports/deadlock-report.json" ]; then
+            echo "Error: deadlock-analyzer did not produce report"
+            exit 1
+          fi
+
+      # ─── Phase: Evaluate results ─────────────────────────────────────────────
+      - name: Check deadlock count
+        id: deadlock_check
+        run: |
+          COUNT=$(cat ${{ github.workspace }}/pipeline-output/reports/deadlock-report.json | \
+            python3 -c "import sys,json; print(json.load(sys.stdin)['totalDeadlocksFound'])")
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          echo "Deadlocks found: $COUNT"
+
+      # ─── Phase: Upload reports (always, even on failure) ────────────────────
+      - name: Upload deadlock reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deadlock-reports
+          path: |
+            pipeline-output/reports/deadlock-report.json
+            pipeline-output/reports/deadlock-report.html
+            pipeline-output/deadlock-analyzer-input.json
+          retention-days: 30
+
+      # ─── Phase: Add summary to GitHub Actions run page ──────────────────────
+      - name: Write job summary
+        if: always()
+        run: |
+          COUNT=${{ steps.deadlock_check.outputs.count }}
+          echo "## Deadlock Analysis Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "$COUNT" -gt "0" ]; then
+            echo "### ❌ $COUNT deadlock(s) detected" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ✅ No deadlocks detected" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Deadlock | Involved Transactions | Pattern | Fix |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|----------------------|---------|-----|" >> $GITHUB_STEP_SUMMARY
+          python3 - <<'EOF'
+          import json, os
+          with open("pipeline-output/reports/deadlock-report.json") as f:
+              data = json.load(f)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              for d in data.get("deadlocks", []):
+                  txs = ", ".join(d.get("involvedTransactions", []))
+                  desc = d.get("conflictDescription", "")
+                  pattern = desc.split("Pattern:")[-1].strip() if "Pattern:" in desc else "-"
+                  fix = d.get("suggestedFix", "-")
+                  summary.write(f"| #{d['id']} | {txs} | {pattern} | {fix} |\n")
+          EOF
+
+      # ─── Phase: Fail pipeline if deadlocks found ────────────────────────────
+      - name: Fail if deadlocks detected
+        if: steps.deadlock_check.outputs.count > 0
+        run: |
+          echo "Pipeline failed: ${{ steps.deadlock_check.outputs.count }} deadlock(s) detected."
+          echo "Download the deadlock-reports artifact for the full HTML report."
+          exit 1
