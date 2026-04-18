@@ -65,8 +65,8 @@ public class DeadlockScenario4Service {
     public void updateProduct(Long productId, String newName, Double newPrice) {
         log.info("Updating product id={}", productId);
         
-        Product product = productRepository.findById(productId)
-                .orElseThrow(() -> new RuntimeException("Product not found: " + productId));
+        Product product = productRepository.findById(productId).orElseThrow(() -> new RuntimeException("Product not found: " + productId));
+        
         product.setName(newName);
         product.setPrice(newPrice);
         productRepository.save(product);
