@@ -36,7 +36,7 @@ jobs:
           mkdir -p ${{ github.workspace }}/pipeline-output/traces
           mkdir -p ${{ github.workspace }}/pipeline-output/reports
           docker run --rm \
-            -v ${{ github.workspace }}:/project \
+            -v ${{ github.workspace }}:/project/src/main/java:ro \
             -v ${{ github.workspace }}/pipeline-output/traces:/output \
             ${{ secrets.DOCKERHUB_USERNAME }}/predlock-extractor:latest \
             /project/src/main/java \
