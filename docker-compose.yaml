@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  predlock-extractor:
+    image: rawanalkhalawi/predlock-extractor@sha256:8c526378c9928d21571238225666931f5db9c0565e3ab0be5dd1b0f3b36596a9
+    environment:
+      JAVA_OPTS: "-Xmx4g -Xms1g"
+    volumes:
+      - ./:/project/src/main/java:ro
+      - ./pipeline-output/traces:/output
+    command: ["/project/src/main/java", "/output/deadlock-analyzer-input.json"]
+
+  deadlock-analyzer:
+    image: rawanalkhalawi/deadlock-analyzer:latest
+    volumes:
+      - ./pipeline-output/traces:/traces:ro
+      - ./pipeline-output/reports:/reports
+    command:
+      - "--traces"
+      - "/traces"
+      - "--output"
+      - "/reports"
+      - "--format"
+      - "both"
+      - "--timeout"
+      - "30000000"
+    depends_on:
+      predlock-extractor:
+        condition: service_completed_successfully
+
+# mkdir -p pipeline-output/traces pipeline-output/reports
+# docker compose up

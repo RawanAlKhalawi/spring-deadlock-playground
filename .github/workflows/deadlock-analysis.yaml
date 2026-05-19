@@ -25,7 +25,7 @@ jobs:
 
       # ─── Pull images ────────────────────────────────────────────────────────
       - name: Pull predlock-extractor image
-        run: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/predlock-extractor:latest
+        run: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/predlock-extractor@sha256:8c526378c9928d21571238225666931f5db9c0565e3ab0be5dd1b0f3b36596a9
 
       - name: Pull deadlock-analyzer image
         run: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/deadlock-analyzer:latest
